@@ -107,6 +107,11 @@ namespace dxvk {
     dxvk::mutex m_mutex;
     
     std::unordered_map<
+      DxvkBindingLayout,
+      DxvkBindingLayoutObjects,
+      DxvkHash, DxvkEq> m_pipelineLayouts;
+
+    std::unordered_map<
       DxvkComputePipelineShaders,
       DxvkComputePipeline,
       DxvkHash, DxvkEq> m_computePipelines;
@@ -115,7 +120,10 @@ namespace dxvk {
       DxvkGraphicsPipelineShaders,
       DxvkGraphicsPipeline,
       DxvkHash, DxvkEq> m_graphicsPipelines;
-    
+
+    DxvkBindingLayoutObjects* createPipelineLayout(
+      const DxvkBindingLayout& layout);
+
   };
   
 }

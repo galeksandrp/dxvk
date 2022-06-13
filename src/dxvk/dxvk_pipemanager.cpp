@@ -31,11 +31,13 @@ namespace dxvk {
     auto pair = m_computePipelines.find(shaders);
     if (pair != m_computePipelines.end())
       return &pair->second;
-    
+
+    auto layout = createPipelineLayout(shaders.cs->getBindings());
+
     auto iter = m_computePipelines.emplace(
       std::piecewise_construct,
       std::tuple(shaders),
-      std::tuple(this, shaders));
+      std::tuple(this, shaders, layout));
     return &iter.first->second;
   }
   
@@ -50,11 +52,28 @@ namespace dxvk {
     auto pair = m_graphicsPipelines.find(shaders);
     if (pair != m_graphicsPipelines.end())
       return &pair->second;
-    
+
+    DxvkBindingLayout mergedLayout;
+    mergedLayout.merge(shaders.vs->getBindings());
+
+    if (shaders.tcs != nullptr)
+      mergedLayout.merge(shaders.tcs->getBindings());
+
+    if (shaders.tes != nullptr)
+      mergedLayout.merge(shaders.tes->getBindings());
+
+    if (shaders.gs != nullptr)
+      mergedLayout.merge(shaders.gs->getBindings());
+
+    if (shaders.fs != nullptr)
+      mergedLayout.merge(shaders.fs->getBindings());
+
+    auto layout = createPipelineLayout(mergedLayout);
+
     auto iter = m_graphicsPipelines.emplace(
       std::piecewise_construct,
       std::tuple(shaders),
-      std::tuple(this, shaders));
+      std::tuple(this, shaders, layout));
     return &iter.first->second;
   }
 
@@ -83,6 +102,20 @@ namespace dxvk {
   void DxvkPipelineManager::stopWorkerThreads() const {
     if (m_stateCache != nullptr)
       m_stateCache->stopWorkerThreads();
+  }
+
+
+  DxvkBindingLayoutObjects* DxvkPipelineManager::createPipelineLayout(
+    const DxvkBindingLayout& layout) {
+    auto pair = m_pipelineLayouts.find(layout);
+    if (pair != m_pipelineLayouts.end())
+      return &pair->second;
+
+    auto iter = m_pipelineLayouts.emplace(
+      std::piecewise_construct,
+      std::tuple(layout),
+      std::tuple(m_device, layout));
+    return &iter.first->second;
   }
   
 }
