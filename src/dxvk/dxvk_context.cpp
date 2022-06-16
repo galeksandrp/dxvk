@@ -219,9 +219,6 @@ namespace dxvk {
         DxvkContextFlag::GpDirtyPipeline,
         DxvkContextFlag::GpDirtyPipelineState);
     }
-
-    m_descriptorState.dirtyStages(stage);
-    m_descriptorState.clearSets();
   }
   
   
@@ -4011,23 +4008,30 @@ namespace dxvk {
     m_descriptorState.clearSets();
     m_descriptorState.dirtyStages(VK_SHADER_STAGE_COMPUTE_BIT);
 
+    m_state.cp.state.bsBindingMask.clear();
     m_cpActivePipeline = VK_NULL_HANDLE;
   }
   
   
   bool DxvkContext::updateComputePipeline() {
-    m_state.cp.pipeline = lookupComputePipeline(m_state.cp.shaders);
+    auto oldPipeline = m_state.cp.pipeline;
+    auto newPipeline = lookupComputePipeline(m_state.cp.shaders);
 
-    if (unlikely(m_state.cp.pipeline == nullptr))
+    m_state.cp.pipeline = newPipeline;
+
+    if (unlikely(!newPipeline))
       return false;
-    
+
+    if (!oldPipeline || oldPipeline->getBindings() != newPipeline->getBindings()) {
+      m_descriptorState.clearSets();
+      m_descriptorState.dirtyStages(VK_SHADER_STAGE_COMPUTE_BIT);
+
+      m_state.cp.state.bsBindingMask.clear();
+    }
+
     if (m_state.cp.pipeline->getBindings()->layout().getPushConstantRange().size)
       m_flags.set(DxvkContextFlag::DirtyPushConstants);
 
-    m_descriptorState.clearSets();
-    m_descriptorState.dirtyStages(VK_SHADER_STAGE_COMPUTE_BIT);
-
-    m_state.cp.state.bsBindingMask.clear();
     m_flags.clr(DxvkContextFlag::CpDirtyPipeline);
     return true;
   }
@@ -4064,20 +4068,24 @@ namespace dxvk {
     m_descriptorState.clearSets();
     m_descriptorState.dirtyStages(VK_SHADER_STAGE_ALL_GRAPHICS);
 
+    m_state.gp.state.bsBindingMask.clear();
     m_gpActivePipeline = VK_NULL_HANDLE;
   }
   
   
   bool DxvkContext::updateGraphicsPipeline() {
-    m_state.gp.pipeline = lookupGraphicsPipeline(m_state.gp.shaders);
+    auto oldPipeline = m_state.gp.pipeline;
+    auto newPipeline = lookupGraphicsPipeline(m_state.gp.shaders);
 
-    if (unlikely(m_state.gp.pipeline == nullptr)) {
+    m_state.gp.pipeline = newPipeline;
+
+    if (unlikely(!newPipeline)) {
       m_state.gp.flags = DxvkGraphicsPipelineFlags();
       return false;
     }
 
-    if (m_state.gp.flags != m_state.gp.pipeline->flags()) {
-      m_state.gp.flags = m_state.gp.pipeline->flags();
+    if (m_state.gp.flags != newPipeline->flags()) {
+      m_state.gp.flags = newPipeline->flags();
 
       // Force-update vertex/index buffers for hazard checks
       m_flags.set(DxvkContextFlag::GpDirtyIndexBuffer,
@@ -4091,13 +4099,17 @@ namespace dxvk {
         this->spillRenderPass(true);
     }
 
-    if (m_state.gp.pipeline->getBindings()->layout().getPushConstantRange().size)
+    // Force full descriptor set updates if the pipeline layout has changed
+    if (!oldPipeline || oldPipeline->getBindings() != newPipeline->getBindings()) {
+      m_descriptorState.clearSets();
+      m_descriptorState.dirtyStages(VK_SHADER_STAGE_ALL_GRAPHICS);
+
+      m_state.gp.state.bsBindingMask.clear();
+    }
+
+    if (newPipeline->getBindings()->layout().getPushConstantRange().size)
       m_flags.set(DxvkContextFlag::DirtyPushConstants);
 
-    m_descriptorState.clearSets();
-    m_descriptorState.dirtyStages(VK_SHADER_STAGE_ALL_GRAPHICS);
-
-    m_state.gp.state.bsBindingMask.clear();
     m_flags.clr(DxvkContextFlag::GpDirtyPipeline);
     return true;
   }
