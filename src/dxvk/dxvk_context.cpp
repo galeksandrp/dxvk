@@ -53,7 +53,6 @@ namespace dxvk {
       DxvkContextFlag::GpDirtyFramebuffer,
       DxvkContextFlag::GpDirtyPipeline,
       DxvkContextFlag::GpDirtyPipelineState,
-      DxvkContextFlag::GpDirtyResources,
       DxvkContextFlag::GpDirtyVertexBuffers,
       DxvkContextFlag::GpDirtyIndexBuffer,
       DxvkContextFlag::GpDirtyXfbBuffers,
@@ -64,8 +63,11 @@ namespace dxvk {
       DxvkContextFlag::GpDirtyDepthBounds,
       DxvkContextFlag::CpDirtyPipeline,
       DxvkContextFlag::CpDirtyPipelineState,
-      DxvkContextFlag::CpDirtyResources,
       DxvkContextFlag::DirtyDrawBuffer);
+
+    m_descriptorState.dirtyStages(
+      VK_SHADER_STAGE_ALL_GRAPHICS |
+      VK_SHADER_STAGE_COMPUTE_BIT);
   }
   
   
@@ -155,14 +157,10 @@ namespace dxvk {
 
     if (likely(needsUpdate))
       m_rcTracked.clr(slot);
-    else
-      needsUpdate = m_rc[slot].bufferSlice.length() != buffer.length();
-
-    m_flags.set(
-      DxvkContextFlag::CpDirtyResources,
-      DxvkContextFlag::GpDirtyResources);
 
     m_rc[slot].bufferSlice = buffer;
+
+    m_descriptorState.dirtyBuffers(stages);
   }
   
   
@@ -178,9 +176,7 @@ namespace dxvk {
       : DxvkBufferSlice();
     m_rcTracked.clr(slot);
 
-    m_flags.set(
-      DxvkContextFlag::CpDirtyResources,
-      DxvkContextFlag::GpDirtyResources);
+    m_descriptorState.dirtyViews(stages);
   }
   
   
@@ -191,9 +187,7 @@ namespace dxvk {
     m_rc[slot].sampler = sampler;
     m_rcTracked.clr(slot);
 
-    m_flags.set(
-      DxvkContextFlag::CpDirtyResources,
-      DxvkContextFlag::GpDirtyResources);
+    m_descriptorState.dirtyViews(stages);
   }
   
   
@@ -217,14 +211,14 @@ namespace dxvk {
     if (stage == VK_SHADER_STAGE_COMPUTE_BIT) {
       m_flags.set(
         DxvkContextFlag::CpDirtyPipeline,
-        DxvkContextFlag::CpDirtyPipelineState,
-        DxvkContextFlag::CpDirtyResources);
+        DxvkContextFlag::CpDirtyPipelineState);
     } else {
       m_flags.set(
         DxvkContextFlag::GpDirtyPipeline,
-        DxvkContextFlag::GpDirtyPipelineState,
-        DxvkContextFlag::GpDirtyResources);
+        DxvkContextFlag::GpDirtyPipelineState);
     }
+
+    m_descriptorState.dirtyStages(stage);
   }
   
   
@@ -1753,21 +1747,16 @@ namespace dxvk {
       ~(VK_BUFFER_USAGE_TRANSFER_DST_BIT |
         VK_BUFFER_USAGE_TRANSFER_SRC_BIT);
 
-    VkBufferUsageFlags resourceMask =
-      VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT |
-      VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
-      VK_BUFFER_USAGE_UNIFORM_TEXEL_BUFFER_BIT |
-      VK_BUFFER_USAGE_STORAGE_TEXEL_BUFFER_BIT;
+    if (usage & (VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT))
+      m_descriptorState.dirtyBuffers(buffer->info().stages);
 
-    if (usage & resourceMask) {
-      m_flags.set(DxvkContextFlag::GpDirtyResources,
-                  DxvkContextFlag::CpDirtyResources);
-    }
-
-    // Fast early-out for resource buffers, very common
-    if (likely(!(usage & ~resourceMask)))
+    // Fast early-out for plain buffers, very common
+    if (likely(!(usage & ~(VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT))))
       return;
     
+    if (usage & (VK_BUFFER_USAGE_UNIFORM_TEXEL_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_TEXEL_BUFFER_BIT))
+      m_descriptorState.dirtyViews(buffer->info().stages);
+
     if (usage & VK_BUFFER_USAGE_INDEX_BUFFER_BIT)
       m_flags.set(DxvkContextFlag::GpDirtyIndexBuffer);
     
@@ -4014,9 +4003,9 @@ namespace dxvk {
   void DxvkContext::unbindComputePipeline() {
     m_flags.set(
       DxvkContextFlag::CpDirtyPipeline,
-      DxvkContextFlag::CpDirtyPipelineState,
-      DxvkContextFlag::CpDirtyResources);
+      DxvkContextFlag::CpDirtyPipelineState);
     
+    m_descriptorState.dirtyStages(VK_SHADER_STAGE_COMPUTE_BIT);
     m_cpActivePipeline = VK_NULL_HANDLE;
   }
   
@@ -4030,6 +4019,7 @@ namespace dxvk {
     if (m_state.cp.pipeline->getBindings()->layout().getPushConstantRange().size)
       m_flags.set(DxvkContextFlag::DirtyPushConstants);
 
+    m_state.cp.state.bsBindingMask.clear();
     m_flags.clr(DxvkContextFlag::CpDirtyPipeline);
     return true;
   }
@@ -4054,7 +4044,6 @@ namespace dxvk {
     m_flags.set(
       DxvkContextFlag::GpDirtyPipeline,
       DxvkContextFlag::GpDirtyPipelineState,
-      DxvkContextFlag::GpDirtyResources,
       DxvkContextFlag::GpDirtyVertexBuffers,
       DxvkContextFlag::GpDirtyIndexBuffer,
       DxvkContextFlag::GpDirtyXfbBuffers,
@@ -4064,6 +4053,7 @@ namespace dxvk {
       DxvkContextFlag::GpDirtyDepthBias,
       DxvkContextFlag::GpDirtyDepthBounds);
     
+    m_descriptorState.dirtyStages(VK_SHADER_STAGE_ALL_GRAPHICS);
     m_gpActivePipeline = VK_NULL_HANDLE;
   }
   
@@ -4094,6 +4084,7 @@ namespace dxvk {
     if (m_state.gp.pipeline->getBindings()->layout().getPushConstantRange().size)
       m_flags.set(DxvkContextFlag::DirtyPushConstants);
 
+    m_state.gp.state.bsBindingMask.clear();
     m_flags.clr(DxvkContextFlag::GpDirtyPipeline);
     return true;
   }
@@ -4343,14 +4334,14 @@ namespace dxvk {
   void DxvkContext::updateComputeShaderResources() {
     this->updateResourceBindings<VK_PIPELINE_BIND_POINT_COMPUTE>(m_state.cp.pipeline->getBindings());
 
-    m_flags.clr(DxvkContextFlag::CpDirtyResources);
+    m_descriptorState.clearStages(VK_SHADER_STAGE_COMPUTE_BIT);
   }
   
   
   void DxvkContext::updateGraphicsShaderResources() {
     this->updateResourceBindings<VK_PIPELINE_BIND_POINT_GRAPHICS>(m_state.gp.pipeline->getBindings());
 
-    m_flags.clr(DxvkContextFlag::GpDirtyResources);
+    m_descriptorState.clearStages(VK_SHADER_STAGE_ALL_GRAPHICS);
   }
   
   
@@ -4948,7 +4939,7 @@ namespace dxvk {
         return false;
     }
     
-    if (m_flags.test(DxvkContextFlag::CpDirtyResources))
+    if (m_descriptorState.hasDirtyComputeSets())
       this->updateComputeShaderResources();
 
     if (m_flags.test(DxvkContextFlag::CpDirtyPipelineState)) {
@@ -4990,7 +4981,7 @@ namespace dxvk {
     if (m_flags.test(DxvkContextFlag::GpDirtyVertexBuffers))
       this->updateVertexBufferBindings();
     
-    if (m_flags.test(DxvkContextFlag::GpDirtyResources))
+    if (m_descriptorState.hasDirtyGraphicsSets())
       this->updateGraphicsShaderResources();
     
     if (m_flags.test(DxvkContextFlag::GpDirtyPipelineState)) {
