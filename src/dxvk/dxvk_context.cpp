@@ -68,6 +68,8 @@ namespace dxvk {
     m_descriptorState.dirtyStages(
       VK_SHADER_STAGE_ALL_GRAPHICS |
       VK_SHADER_STAGE_COMPUTE_BIT);
+
+    m_descriptorState.clearSets();
   }
   
   
@@ -219,6 +221,7 @@ namespace dxvk {
     }
 
     m_descriptorState.dirtyStages(stage);
+    m_descriptorState.clearSets();
   }
   
   
@@ -4005,7 +4008,9 @@ namespace dxvk {
       DxvkContextFlag::CpDirtyPipeline,
       DxvkContextFlag::CpDirtyPipelineState);
     
+    m_descriptorState.clearSets();
     m_descriptorState.dirtyStages(VK_SHADER_STAGE_COMPUTE_BIT);
+
     m_cpActivePipeline = VK_NULL_HANDLE;
   }
   
@@ -4018,6 +4023,9 @@ namespace dxvk {
     
     if (m_state.cp.pipeline->getBindings()->layout().getPushConstantRange().size)
       m_flags.set(DxvkContextFlag::DirtyPushConstants);
+
+    m_descriptorState.clearSets();
+    m_descriptorState.dirtyStages(VK_SHADER_STAGE_COMPUTE_BIT);
 
     m_state.cp.state.bsBindingMask.clear();
     m_flags.clr(DxvkContextFlag::CpDirtyPipeline);
@@ -4053,7 +4061,9 @@ namespace dxvk {
       DxvkContextFlag::GpDirtyDepthBias,
       DxvkContextFlag::GpDirtyDepthBounds);
     
+    m_descriptorState.clearSets();
     m_descriptorState.dirtyStages(VK_SHADER_STAGE_ALL_GRAPHICS);
+
     m_gpActivePipeline = VK_NULL_HANDLE;
   }
   
@@ -4083,6 +4093,9 @@ namespace dxvk {
 
     if (m_state.gp.pipeline->getBindings()->layout().getPushConstantRange().size)
       m_flags.set(DxvkContextFlag::DirtyPushConstants);
+
+    m_descriptorState.clearSets();
+    m_descriptorState.dirtyStages(VK_SHADER_STAGE_ALL_GRAPHICS);
 
     m_state.gp.state.bsBindingMask.clear();
     m_flags.clr(DxvkContextFlag::GpDirtyPipeline);
@@ -4138,7 +4151,6 @@ namespace dxvk {
   
   template<VkPipelineBindPoint BindPoint>
   void DxvkContext::updateResourceBindings(const DxvkBindingLayoutObjects* layout) {
-    std::array<VkDescriptorSet, DxvkDescriptorSets::SetCount> sets = { VK_NULL_HANDLE, VK_NULL_HANDLE };
     std::array<DxvkDescriptorInfo, MaxNumActiveBindings> descriptors;
 
     const auto& bindings = layout->layout();
@@ -4150,15 +4162,20 @@ namespace dxvk {
 
     DxvkBindingMask newBindMask = refBindMask;
 
+    uint32_t dirtySetMask = BindPoint == VK_PIPELINE_BIND_POINT_GRAPHICS
+      ? m_descriptorState.getDirtyGraphicsSets()
+      : m_descriptorState.getDirtyComputeSets();
+
     uint32_t bindingIndex = 0;
+    uint32_t firstUpdated = DxvkDescriptorSets::SetCount;
 
     for (uint32_t i = 0; i < DxvkDescriptorSets::SetCount; i++) {
       // Initialize binding mask for the current set, only
       // clear bits if certain resources are actually unbound.
       uint32_t bindingCount = bindings.getBindingCount(i);
 
-      // TODO skip if set is unmodified
-      if (true) {
+      if ((dirtySetMask & (1u << i)) || !m_descriptorState.getSet<BindPoint>(i)) {
+        firstUpdated = std::min(firstUpdated, i);
         newBindMask.setRange(bindingIndex, bindingCount);
 
         for (uint32_t j = 0; j < bindingCount; j++) {
@@ -4301,23 +4318,27 @@ namespace dxvk {
               Logger::err(str::format("DxvkContext: Unhandled descriptor type: ", binding.descriptorType));
           }
         }
-      }
 
-      // Create and populate descriptor set with the given descriptors
-      sets[i] = allocateDescriptorSet(layout->getSetLayout(i));
+        // Create and populate descriptor set with the given descriptors
+        VkDescriptorSet& set = m_descriptorState.getSet<BindPoint>(i);
+        set = allocateDescriptorSet(layout->getSetLayout(i));
 
-      if (bindingCount) {
-        m_cmd->updateDescriptorSetWithTemplate(sets[i],
-          layout->getSetUpdateTemplate(i), descriptors.data());
+        if (bindingCount) {
+          m_cmd->updateDescriptorSetWithTemplate(set,
+            layout->getSetUpdateTemplate(i), descriptors.data());
+        }
       }
 
       bindingIndex += bindingCount;
     }
 
-    // Bind all required descriptor sets
+    // Bind all updated descriptor sets
+    uint32_t setCount = DxvkDescriptorSets::SetCount - firstUpdated;
+    const VkDescriptorSet* setData = &m_descriptorState.getSet<BindPoint>(firstUpdated);
+
     m_cmd->cmdBindDescriptorSets(BindPoint,
       layout->getPipelineLayout(),
-      0, sets.size(), sets.data(),
+      firstUpdated, setCount, setData,
       0, nullptr);
 
     // Update pipeline if there are unbound resources
