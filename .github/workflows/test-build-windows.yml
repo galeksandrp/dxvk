@@ -56,7 +56,7 @@ jobs:
       uses: actions/upload-artifact@v2
       with:
         name: dxvk
-        path:
-          - build-msvc-x86
-          - build-msvc-x64
+        path: |
+          build-msvc-x86
+          build-msvc-x64
         if-no-files-found: error
